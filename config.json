@@ -1,4 +1,19 @@
 {
   "prefix": "YOUR_BOT_PREFIX_HERE",
-  "invite_link": "YOUR_BOT_INVITE_LINK_HERE"
+  "invite_link": "YOUR_BOT_INVITE_LINK_HERE",
+  "echo": {
+    "max_messages_per_analysis": 10000,
+    "model_training_timeout": 3600,
+    "max_active_sessions_per_server": 5,
+    "message_generation_cooldown": 2.0,
+    "data_retention_days": 30,
+    "max_response_length": 2000,
+    "conversation_initiation_chance": 0.1,
+    "response_delay_min": 1.0,
+    "response_delay_max": 5.0,
+    "ollama_host": "http://localhost:11434",
+    "base_model": "dolphin3:latest",
+    "training_epochs": 10,
+    "batch_size": 4
+  }
 }
