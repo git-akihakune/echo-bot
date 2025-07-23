@@ -12,20 +12,29 @@ from discord.ext import commands
 from discord.ext.commands import Context
 from datetime import datetime
 
-# Import placeholder services (will be implemented later)
+# Import services
 from services.message_processor import MessageProcessor
 from services.personality_engine import PersonalityEngine
 from services.echo_session_manager import EchoSessionManager
+import os
 
 
 class Echo(commands.Cog, name="echo"):
     def __init__(self, bot) -> None:
         self.bot = bot
         
-        # Initialize services (placeholder implementations)
-        self.message_processor = MessageProcessor()
-        self.personality_engine = PersonalityEngine()
-        self.session_manager = EchoSessionManager()
+        # Get database path
+        db_path = f"{os.path.realpath(os.path.dirname(__file__))}/../database/database.db"
+        
+        # Initialize services
+        self.message_processor = MessageProcessor(bot, db_path)
+        self.personality_engine = PersonalityEngine(db_path, bot.config)
+        self.session_manager = EchoSessionManager(db_path, bot.config)
+        
+        # Set up callback to trigger model training after message analysis
+        self.message_processor.set_personality_engine_callback(
+            self.personality_engine.create_personality_profile
+        )
 
     @app_commands.command(
         name="analyze",
@@ -52,7 +61,8 @@ class Echo(commands.Cog, name="echo"):
         
         try:
             # Parse and validate the date
-            parsed_date = self._parse_date(cutoff_date)
+            from utils.date_parser import parse_dd_mm_yyyy
+            parsed_date = parse_dd_mm_yyyy(cutoff_date)
             
             # Check if user has permission to analyze this user
             if not await self._can_analyze_user(interaction, user):
@@ -301,18 +311,6 @@ class Echo(commands.Cog, name="echo"):
             )
             await interaction.followup.send(embed=embed)
 
-    def _parse_date(self, date_string: str) -> datetime:
-        """
-        Parse date string in DD.MM.YYYY format.
-        
-        :param date_string: Date string to parse
-        :return: Parsed datetime object
-        :raises ValueError: If date format is invalid
-        """
-        try:
-            return datetime.strptime(date_string, "%d.%m.%Y")
-        except ValueError:
-            raise ValueError("Date must be in DD.MM.YYYY format")
 
     async def _can_analyze_user(self, interaction: discord.Interaction, target_user: discord.Member) -> bool:
         """

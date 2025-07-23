@@ -6,12 +6,14 @@ Description:
 Version: 6.1.0
 """
 
+import asyncio
 import json
 import logging
 import os
 import platform
 import random
 import sys
+from datetime import datetime
 
 import aiosqlite
 import discord
@@ -20,6 +22,7 @@ from discord.ext.commands import Context
 from dotenv import load_dotenv
 
 from database import DatabaseManager
+from services.background_tasks import BackgroundTaskManager
 
 if not os.path.isfile(f"{os.path.realpath(os.path.dirname(__file__))}/config.json"):
     sys.exit("'config.json' not found! Please add it and try again.")
@@ -63,12 +66,9 @@ intents.presences = True
 intents = discord.Intents.default()
 
 """
-Uncomment this if you want to use prefix (normal) commands.
-It is recommended to use slash commands and therefore not use prefix commands.
-
-If you want to use prefix commands, make sure to also enable the intent below in the Discord developer portal.
+Echo bot requires message content intent to analyze messages and generate responses.
 """
-# intents.message_content = True
+intents.message_content = True
 
 # Setup both of the loggers
 
@@ -140,6 +140,8 @@ class DiscordBot(commands.Bot):
         self.logger = logger
         self.config = config
         self.database = None
+        self.background_task_manager = None
+        self.launch_time = datetime.now()
 
     async def init_db(self) -> None:
         async with aiosqlite.connect(
@@ -201,6 +203,28 @@ class DiscordBot(commands.Bot):
                 f"{os.path.realpath(os.path.dirname(__file__))}/database/database.db"
             )
         )
+        
+        # Initialize background task manager after cogs are loaded
+        await self._init_background_tasks()
+    
+    async def _init_background_tasks(self) -> None:
+        """Initialize background task manager with service references."""
+        try:
+            # Get echo cog and its services
+            echo_cog = self.get_cog("echo")
+            if echo_cog:
+                self.background_task_manager = BackgroundTaskManager(
+                    bot=self,
+                    message_processor=echo_cog.message_processor,
+                    personality_engine=echo_cog.personality_engine,
+                    session_manager=echo_cog.session_manager
+                )
+                self.background_task_manager.start_background_tasks()
+                self.logger.info("Background task manager initialized")
+            else:
+                self.logger.warning("Echo cog not found, background tasks not started")
+        except Exception as e:
+            self.logger.error(f"Failed to initialize background tasks: {e}")
 
     async def on_message(self, message: discord.Message) -> None:
         """
@@ -210,7 +234,112 @@ class DiscordBot(commands.Bot):
         """
         if message.author == self.user or message.author.bot:
             return
+        
+        # Handle echo responses for active sessions
+        await self._handle_echo_response(message)
+        
+        # Process normal commands
         await self.process_commands(message)
+    
+    async def _handle_echo_response(self, message: discord.Message) -> None:
+        """Handle potential echo responses to messages."""
+        try:
+            if not message.guild:
+                return  # Only handle guild messages
+            
+            echo_cog = self.get_cog("echo")
+            if not echo_cog:
+                return
+            
+            # Check if there's an active echo session in this channel
+            active_echo = await echo_cog.session_manager.get_active_echo(message.channel.id)
+            if not active_echo:
+                return
+            
+            user_id = int(active_echo["user_id"])
+            server_id = message.guild.id
+            
+            # Prepare recent channel history
+            channel_history = []
+            async for hist_msg in message.channel.history(limit=10):
+                channel_history.insert(0, {
+                    "author": hist_msg.author.display_name,
+                    "author_id": str(hist_msg.author.id),
+                    "content": hist_msg.content,
+                    "timestamp": hist_msg.created_at,
+                    "is_bot": hist_msg.author.bot,
+                    "mentions": [str(user.id) for user in hist_msg.mentions]
+                })
+            
+            # Check if echo should respond
+            should_respond = await echo_cog.personality_engine.should_respond(
+                user_id, server_id, channel_history
+            )
+            
+            if not should_respond:
+                return
+            
+            # Get natural response timing
+            delay = await echo_cog.personality_engine.get_response_timing(user_id, server_id)
+            
+            # Wait for natural timing
+            await asyncio.sleep(delay)
+            
+            # Generate response
+            context = [
+                {"role": "user", "content": message.content}
+            ]
+            
+            response = await echo_cog.personality_engine.generate_response(
+                user_id, server_id, context, channel_history
+            )
+            
+            if response:
+                # Simulate typing
+                typing_duration = min(len(response) / 50.0, 5.0)  # Simulate typing speed
+                async with message.channel.typing():
+                    await asyncio.sleep(typing_duration)
+                
+                # Send response
+                await message.channel.send(response)
+                
+                # Update session statistics
+                await echo_cog.session_manager.increment_session_stats(
+                    message.channel.id, messages_generated=1
+                )
+                
+                # Record response in database
+                await self._record_echo_response(
+                    active_echo["session_id"], response, context, len(response)
+                )
+                
+        except Exception as e:
+            self.logger.error(f"Error handling echo response: {e}")
+    
+    async def _record_echo_response(
+        self, 
+        session_id: int, 
+        response: str, 
+        context: list, 
+        generation_time_ms: int
+    ) -> None:
+        """Record echo response in database."""
+        try:
+            async with aiosqlite.connect(
+                f"{os.path.realpath(os.path.dirname(__file__))}/database/database.db"
+            ) as db:
+                await db.execute("""
+                    INSERT INTO echo_responses 
+                    (session_id, response_content, context_messages, generation_time_ms)
+                    VALUES (?, ?, ?, ?)
+                """, (
+                    session_id, response, 
+                    json.dumps(context) if context else None,
+                    generation_time_ms
+                ))
+                await db.commit()
+        except Exception as e:
+            self.logger.error(f"Error recording echo response: {e}")
 
     async def on_command_completion(self, context: Context) -> None:
         """

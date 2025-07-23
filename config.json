@@ -1,6 +1,6 @@
 {
-  "prefix": "YOUR_BOT_PREFIX_HERE",
-  "invite_link": "YOUR_BOT_INVITE_LINK_HERE",
+  "prefix": "!",
+  "invite_link": "https://discord.com/api/oauth2/authorize?client_id=YOUR_BOT_ID&permissions=8&scope=bot%20applications.commands",
   "echo": {
     "max_messages_per_analysis": 10000,
     "model_training_timeout": 3600,
